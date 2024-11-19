@@ -22,6 +22,9 @@ class WhisperX:
         self.compute_type = compute_type
         self.model = None
 
+    def get_model_name(self):
+        return f"whisper-{self.whisper_arch}"
+
     def load_model(self) -> FasterWhisperPipeline:
         """Loads the Whisper archtype model."""
         self.model = whisperx.load_model(
@@ -92,18 +95,24 @@ class MMS_1B_All:
         self.model = None
         self.processor = None
 
+    def get_model_name(self):
+        return self.model_id.split("/")[-1]
+
     def load_model(self):
         """Loads the processor and model for MMS-1B."""
-        processor = AutoProcessor.from_pretrained(
+        self.processor = AutoProcessor.from_pretrained(
             self.model_id, cache_dir=STORAGE_DIR_MODEL_MMS_1B_ALL
         )
-        model = Wav2Vec2ForCTC.from_pretrained(
+        self.model = Wav2Vec2ForCTC.from_pretrained(
             self.model_id, cache_dir=STORAGE_DIR_MODEL_MMS_1B_ALL
         )
-        return processor, model
+        return self.processor, self.model
 
     def transcribe(self, audio: Union[str, np.ndarray], language: str = "eng"):
         """Transcribes audio using the loaded model, transcribes to English by default."""
+        if self.processor is None or self.model is None:
+            self.load_model()
+
         audio = audio.astype(np.float32) if isinstance(audio, np.ndarray) else audio
         self.processor.tokenizer.set_target_lang(language)
         self.model.load_adapter(language)
