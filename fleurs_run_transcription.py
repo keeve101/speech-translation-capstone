@@ -70,7 +70,7 @@ batch_size = 16
 
 # Make folder to store predictions
 cwd = Path.cwd()
-output_folder = cwd / "predictions"
+output_folder = cwd / "predictions-transcription"
 output_folder.mkdir(exist_ok=True)
 
 # Define models
@@ -145,7 +145,7 @@ for model in models:
         with open(file, "r", encoding="utf-8") as f:
             batch_predictions = json.load(f)
             all_predictions.extend(batch_predictions)
-
+            
     # Validate that all predictions are the same length
     assert len(all_predictions) == len(combined_dataset)
 
@@ -199,6 +199,8 @@ for model in models:
             evaluation_results[language][metric.name] = results
 
     # Write the results to a JSON file
-    output_file_path = f"{output_folder}/{model.get_model_name()}_evaluation_results.json"
+    output_file_path = (
+        f"{output_folder}/{model.get_model_name()}_evaluation_results.json"
+    )
     with open(output_file_path, "w") as output_file:
         json.dump(evaluation_results, output_file, indent=4)
