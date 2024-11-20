@@ -90,10 +90,11 @@ class WhisperX:
 
 
 class MMS_1B_All:
-    def __init__(self, model_id: str = "facebook/mms-1b-all"):
+    def __init__(self, model_id: str = "facebook/mms-1b-all", device: str = "cpu"):
         self.model_id = model_id
         self.model = None
         self.processor = None
+        self.device = torch.device(device)
 
     def get_model_name(self):
         return self.model_id.split("/")[-1]
@@ -106,6 +107,7 @@ class MMS_1B_All:
         self.model = Wav2Vec2ForCTC.from_pretrained(
             self.model_id, cache_dir=STORAGE_DIR_MODEL_MMS_1B_ALL
         )
+        self.model.to(self.device)
         return self.processor, self.model
 
     def transcribe(self, audio: Union[str, np.ndarray], language: str = "eng"):
@@ -118,6 +120,7 @@ class MMS_1B_All:
         self.model.load_adapter(language)
 
         inputs = self.processor(audio, sampling_rate=16_000, return_tensors="pt")
+        inputs = {key: value.to(self.device) for key, value in inputs.items()}  
 
         with torch.no_grad():
             outputs = self.model(**inputs).logits

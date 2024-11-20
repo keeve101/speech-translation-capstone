@@ -74,7 +74,8 @@ output_folder = cwd / "predictions"
 output_folder.mkdir(exist_ok=True)
 
 # Define models
-models = [WhisperX(whisper_arch="medium"), MMS_1B_All()]
+device = "cuda"
+models = [WhisperX(whisper_arch="medium", device=device), MMS_1B_All(device=device)]
 
 # Define evaluation metrics
 wer_metric = evaluate.load("wer")
@@ -163,30 +164,41 @@ for model in models:
     ) as f:
         json.dump(all_predictions, f, indent=4)
 
-    ## Align gold and predictions
-    # predictions = [prediction["prediction"] for prediction in all_predictions]
-    # updated_dataset = combined_dataset.add_column("prediction", predictions)
+    evaluation_results = {
+        "model": model.get_model_name(),
+    }
 
-    ## Evaluate the predictions
-    # for language in languages_long:
-    #    print(f"Evaluating {language}")
-    #    for metric in evaluation_metrics:
-    #        print(f"Evaluating {metric.name}")
-    #        dataset_lang = updated_dataset.filter(lambda x: x["language"] == language)
-    #        predictions = dataset_lang["prediction"]
-    #        references = dataset_lang["transcription"]
+    # Evaluate the predictions
+    for language in languages_long:
+        evaluation_results[language] = {}
+        for metric in evaluation_metrics:
 
-    #        if language == "Mandarin Chinese":
-    #            predictions = add_spaces_in_chinese(predictions)
+            predictions_lang = [
+                prediction
+                for prediction in all_predictions
+                if prediction["language"] == language
+            ]
+            predictions = [prediction["prediction"] for prediction in predictions_lang]
+            references = [prediction["ground_truth"] for prediction in predictions_lang]
 
-    #        normalizer = (
-    #            BasicTextNormalizer()
-    #            if language != "English"
-    #            else EnglishTextNormalizer()
-    #        )
+            if language == "Mandarin Chinese":
+                predictions = add_spaces_in_chinese(predictions)
 
-    #        predictions = [normalizer(prediction) for prediction in predictions]
-    #        references = [normalizer(reference) for reference in references]
+            normalizer = (
+                BasicTextNormalizer()
+                if language != "English"
+                else EnglishTextNormalizer()
+            )
 
-    #        results = metric.compute(predictions=predictions, references=references)
-    #        print(results)
+            predictions = [normalizer(prediction) for prediction in predictions]
+            references = [normalizer(reference) for reference in references]
+
+            results = metric.compute(predictions=predictions, references=references)
+
+            # Store results in the dictionary under the corresponding language and metric
+            evaluation_results[language][metric.name] = results
+
+    # Write the results to a JSON file
+    output_file_path = f"{output_folder}/{model.get_model_name()}_evaluation_results.json"
+    with open(output_file_path, "w") as output_file:
+        json.dump(evaluation_results, output_file, indent=4)
