@@ -4,7 +4,14 @@ import numpy as np
 import torch
 import gc
 
-from transformers import Wav2Vec2ForCTC, AutoProcessor, AutoModelForSeq2SeqLM, M2M100ForConditionalGeneration
+from transformers import (
+    Wav2Vec2ForCTC,
+    AutoProcessor,
+    MBartForConditionalGeneration,
+    MBart50TokenizerFast,
+    AutoModelForSeq2SeqLM,
+    M2M100ForConditionalGeneration
+)
 from typing import Union
 from config import *
 from small100_tokenization import SMALL100Tokenizer
@@ -141,7 +148,7 @@ class MMS_1B_All:
         self.model.load_adapter(language)
 
         inputs = self.processor(audio, sampling_rate=16_000, return_tensors="pt")
-        inputs = {key: value.to(self.device) for key, value in inputs.items()}  
+        inputs = {key: value.to(self.device) for key, value in inputs.items()}
 
         with torch.no_grad():
             outputs = self.model(**inputs).logits
@@ -233,3 +240,118 @@ class Small100:
         encoded_text = self.tokenizer(text, return_tensors="pt").to(self.device)
         generated_tokens = self.model.generate(**encoded_text)
         return self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)[0]
+
+class MBartLarge50ManyToOne:
+    def __init__(
+        self,
+        model_id: str = "facebook/mbart-large-50-many-to-one-mmt",
+        device: str = "cpu",
+    ):
+        self.model_id = model_id
+        self.device = torch.device(device)
+        self.model = None
+        self.tokenizer = None
+
+    def get_model_name(self):
+        """Returns the name of the loaded model."""
+        return self.model_id.split("/")[-1]
+
+    def load_model(self):
+        self.tokenizer = MBart50TokenizerFast.from_pretrained(
+            self.model_id, cache_dir=STORAGE_DIR_MODEL_MBART_LARGE_50_MANY_TO_ONE
+        )
+        self.model = MBartForConditionalGeneration.from_pretrained(
+            self.model_id, cache_dir=STORAGE_DIR_MODEL_MBART_LARGE_50_MANY_TO_ONE
+        )
+        self.model.to(self.device)
+        return self.tokenizer, self.model
+
+    def translate(self, text: str, source_lang: str, target_lang: str = "en_XX") -> str:
+        """
+        Translates text from the source language to the target language (default: English).
+
+        Args:
+            text (str): Input text to translate.
+            source_lang (str): Source language code (e.g., 'fr_XX' for French).
+            target_lang (str): Target language code (default: 'en_XX' for English), since Many-to-One, only to English.
+
+        Returns:
+            str: Translated text.
+        """
+        if self.tokenizer is None or self.model is None:
+            self.load_model()
+
+        # Set the source language
+        self.tokenizer.src_lang = source_lang
+
+        # Tokenize input text
+        inputs = self.tokenizer(text, return_tensors="pt")
+        inputs = {key: value.to(self.device) for key, value in inputs.items()}
+
+        # Generate translation
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                forced_bos_token_id=self.tokenizer.lang_code_to_id[target_lang],
+            )
+
+        # Decode the translation
+        translated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        return translated_text
+
+
+class MBartLarge50ManyToMany:
+    def __init__(
+        self,
+        model_id: str = "facebook/mbart-large-50-many-to-many-mmt",
+        device: str = "cpu",
+    ):
+        self.model_id = model_id
+        self.device = torch.device(device)
+        self.model = None
+        self.tokenizer = None
+
+    def get_model_name(self):
+        """Returns the name of the loaded model."""
+        return self.model_id.split("/")[-1]
+
+    def load_model(self):
+        self.tokenizer = MBart50TokenizerFast.from_pretrained(
+            self.model_id, cache_dir=STORAGE_DIR_MODEL_MBART_LARGE_50_MANY_TO_MANY
+        )
+        self.model = MBartForConditionalGeneration.from_pretrained(
+            self.model_id, cache_dir=STORAGE_DIR_MODEL_MBART_LARGE_50_MANY_TO_MANY
+        )
+        self.model.to(self.device)
+        return self.tokenizer, self.model
+
+    def translate(self, text: str, source_lang: str, target_lang: str) -> str:
+        """
+        Translates text from the source language to the target language.
+        Args:
+            text (str): Input text to translate.
+            source_lang (str): Source language code (e.g., 'en_XX' for English).
+            target_lang (str): Target language code (e.g., 'zh_CN' for Simplified Chinese).
+        Returns:
+            str: Translated text.
+        """
+        if self.tokenizer is None or self.model is None:
+            self.load_model()
+
+        # Set the source language
+        self.tokenizer.src_lang = source_lang
+
+        # Tokenize input text
+        inputs = self.tokenizer(text, return_tensors="pt")
+        inputs = {key: value.to(self.device) for key, value in inputs.items()}
+
+        # Generate translation
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                forced_bos_token_id=self.tokenizer.lang_code_to_id[target_lang],
+            )
+
+        # Decode the translation
+        translated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        return translated_text
