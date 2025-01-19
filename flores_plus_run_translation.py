@@ -1,109 +1,175 @@
-from datasets import load_dataset
-from models import MBartLarge50ManyToMany
+from datasets import load_dataset, Dataset
+from config import STORAGE_DIR_DATA_FLEURS
+from models import Nllb200, Small100, MBartLarge50ManyToMany
+from pathlib import Path
+from tqdm import tqdm
 from whisper.normalizers import BasicTextNormalizer, EnglishTextNormalizer
+from pandas import DataFrame
 from pathlib import Path
 from config import STORAGE_DIR_DATA_FLORES_PLUS
 
-import numpy as np
 import json
-import torch
-import gc
 import glob
 import evaluate
 
-languages_long = "English,Mandarin Chinese".split(",")
-languages_glottocodes = ["stan1293", "beij1234"]
-languages_mbart_language_ids = ["en_XX", "zh_CN"]
+def detect_chinese(text):
+    has_chinese = any(
+        "\u4E00" <= char <= "\u9FFF" or "\u3400" <= char <= "\u4DBF" for char in text
+    )
+    return has_chinese
 
+
+def add_spaces_in_chinese(prediction):
+    reconstruct = ""
+    for i, char in enumerate(prediction):
+        if detect_chinese(char):
+            if i != len(predictions) - 1:
+                reconstruct += char + " "
+            else:
+                reconstruct += char
+        else:
+            reconstruct += char
+    return reconstruct
+
+
+def extract_and_convert_to_pd(dataset: Dataset, lang: str) -> DataFrame:
+    df = dataset.to_pandas()
+    return df.rename(columns={'text': lang})
+
+def combine_with_pd(combined: DataFrame, dataset2: Dataset, lang2: str):
+    df2 = extract_and_convert_to_pd(dataset2, lang2)
+
+    return combined.merge(
+        df2[['id', lang2]], 
+        on='id',
+        how='inner'
+    )
+
+languages_long = ["English","Mandarin Chinese"]
+lang_codes = ["en", 'zh']
+languages_glottocodes = ["stan1293", "beij1234"]
 glottocode_to_long = {
     glottocode: long for glottocode, long in zip(languages_glottocodes, languages_long)
 }
-
-glottocode_to_mbart_language_id = {
+glottocode_to_lang_code = {
     glottocode: mbart_language_id
     for glottocode, mbart_language_id in zip(
-        languages_glottocodes, languages_mbart_language_ids
+        languages_glottocodes, lang_codes
     )
 }
+long_to_lang_code_translation = {
+    long: lang_code for long, lang_code in zip(languages_long, lang_codes)
+}
+
+combined_dataset = None
+
+full_dataset = load_dataset(
+    "openlanguagedata/flores_plus", cache_dir=STORAGE_DIR_DATA_FLORES_PLUS
+)['devtest'].select_columns(['id', 'text', 'glottocode'])
+
+for lang in lang_codes:
+    dataset = full_dataset.filter(
+        lambda x: lang == glottocode_to_lang_code.get(x["glottocode"])
+    )
+
+    if combined_dataset is None:
+        combined_dataset = extract_and_convert_to_pd(dataset, lang)
+    else:
+        combined_dataset = combine_with_pd(combined_dataset, dataset, lang)
+
+print(combined_dataset.head())
+
+combined_dataset = Dataset.from_pandas(combined_dataset.drop_duplicates(['id']))
+
+# Define batch size
+batch_size = 32
 
 # Make folder to store predictions
 cwd = Path.cwd()
+output_folder = cwd / "predictions-translation" / "flores"
+output_folder.mkdir(exist_ok=True)
 
 # Define models
 device = "cuda"
-models = [MBartLarge50ManyToMany(device=device)]
+models = [
+    Nllb200(device=device),
+    # Nllb200(model_id="facebook/nllb-200-distilled-1.3B", device=device),
+    Small100(device=device),
+    MBartLarge50ManyToMany(device=device)
+]
 
 # Define evaluation metrics
 wer_metric = evaluate.load("wer")
 bleu_metric = evaluate.load("bleu")
 evaluation_metrics = [wer_metric, bleu_metric]
 
-dataset = load_dataset(
-    "openlanguagedata/flores_plus", cache_dir=STORAGE_DIR_DATA_FLORES_PLUS
-)
-
-dataset_filtered = dataset["devtest"].filter(
-    lambda x: x["glottocode"] in languages_glottocodes
-)
-
-unique_ids = set(dataset_filtered["id"])
-
 for model in models:
-    if model.model is not None:
-        # Flush the current model from memory
-        if model.device == "cuda":
-            torch.cuda.empty_cache()
-        del model.model
-        gc.collect()
+    model.unload()
 
-    output_folder = cwd / f"predictions-translation-{model.get_model_name()}"
-    output_folder.mkdir(exist_ok=True)
+    for i in tqdm(range(0, len(combined_dataset), batch_size)):
+        for src_lang in lang_codes:
+            for tgt_lang in lang_codes:
+                if src_lang == tgt_lang:
+                    continue
 
-    for id in unique_ids:
-        d_filtered = dataset_filtered.filter(lambda x: x["id"] == id)
+                task = f"{src_lang}-{tgt_lang}"
+                batch_output_file_path = (
+                    output_folder / f"{model.get_model_name()}_{task}_batch_{i}.json"
+                )
 
-        predictions = []
+                # To skip already processed batches
+                if batch_output_file_path.exists():
+                    continue
 
-        for idx in range(len(d_filtered)):
-            source_sample = d_filtered[idx]
-            target_sample = d_filtered[1 - idx]
-            task = f"{source_sample['glottocode']}-{target_sample['glottocode']}"
+                batch = combined_dataset.select(
+                    list(range(i, min(i + batch_size, len(combined_dataset))))
+                )
 
-            batch_output_file_path = (
-                output_folder / f"{model.get_model_name()}_{id}_{task}.json"
-            )
+                normalizers = [
+                    BasicTextNormalizer() if tgt_lang != "en" else EnglishTextNormalizer()
+                ]
 
-            # To skip already processed batches
-            if batch_output_file_path.exists():
-                continue
+                if tgt_lang == "zh":
+                    normalizers.append(add_spaces_in_chinese)
 
-            translation = model.translate(
-                text=source_sample["text"],
-                source_lang=glottocode_to_mbart_language_id[
-                    source_sample["glottocode"]
-                ],
-                target_lang=glottocode_to_mbart_language_id[
-                    target_sample["glottocode"]
-                ],
-            )
+                # Predict for batch
+                predictions = []
+                for sample in tqdm(batch, leave=False):
+                    src_txt = sample[src_lang]
+                    tgt_txt = sample[tgt_lang]
 
-            predictions.append(
-                {
-                    "id": id,
-                    "language": glottocode_to_long[source_sample["glottocode"]],
-                    "prediction": translation,
-                    "source_ground_truth": source_sample["text"],
-                    "target_ground_truth": target_sample["text"],
-                    "task": task,
-                }
-            )
+                    translation = model.translate(
+                        src_txt,
+                        source=src_lang,
+                        target=tgt_lang,
+                    )
 
-        with open(batch_output_file_path, "w", encoding="utf-8") as f:
-            json.dump(predictions, f, indent=4)
+                    for normalizer in normalizers:
+                        tgt_txt = normalizer(tgt_txt)
+                        translation = normalizer(translation)
+
+
+                    # Store predictions along with 'id', 'lang_id', 'language', 'lang_group_id'.
+                    predictions.append(
+                        {
+                            "id": sample["id"],
+                            "src_lang": src_lang,
+                            "tgt_lang": tgt_lang,
+                            "source_ground_truth": src_txt,
+                            "target_ground_truth": tgt_txt,
+                            "prediction": translation,
+                            "task": task,
+                        }
+                    )
+
+                with open(batch_output_file_path, "w", encoding="utf-8") as f:
+                    json.dump(predictions, f, indent=4)
+
+    model.unload()
 
     # Combine the batch outputs into a single file
     batch_output_file_paths = glob.glob(
-        str(output_folder / f"{model.get_model_name()}_*.json")
+        str(output_folder / f"{model.get_model_name()}_*batch*.json")
     )
 
     all_predictions = []
@@ -116,3 +182,31 @@ for model in models:
         f"{output_folder}/{model.get_model_name()}.json", "w", encoding="utf-8"
     ) as f:
         json.dump(all_predictions, f, indent=4)
+
+    evaluation_results = {
+       "model": model.get_model_name(),
+    }
+
+    for i, predictions in enumerate(all_predictions):
+        if type(predictions) != dict:
+            print(i, predictions)
+
+    # Evaluate the predictions
+    for language in languages_long:
+       evaluation_results[language] = {}
+       for metric in evaluation_metrics:
+           predictions_lang = [
+               prediction for prediction in all_predictions if prediction["tgt_lang"] == long_to_lang_code_translation[language]
+           ]
+           predictions = [prediction["prediction"] for prediction in predictions_lang]
+           references = [prediction["target_ground_truth"] for prediction in predictions_lang]
+
+           results = metric.compute(predictions=predictions, references=references)
+
+           # Store results in the dictionary under the corresponding language and metric
+           evaluation_results[language][metric.name] = results
+
+    # Write the results to a JSON file
+    output_file_path = f"{output_folder}/{model.get_model_name()}_evaluation_results.json"
+    with open(output_file_path, "w") as output_file:
+       json.dump(evaluation_results, output_file, indent=4)

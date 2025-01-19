@@ -1,0 +1,35 @@
+{
+    "model": "mbart-large-50-many-to-many-mmt",
+    "English": {
+        "wer": 0.6404350607805502,
+        "bleu": {
+            "bleu": 0.2539902225700622,
+            "precisions": [
+                0.5868674310448037,
+                0.3241246075827095,
+                0.19174325902604986,
+                0.11792730581874632
+            ],
+            "brevity_penalty": 0.9917914846136509,
+            "length_ratio": 0.9918249908659116,
+            "translation_length": 21717,
+            "reference_length": 21896
+        }
+    },
+    "Mandarin Chinese": {
+        "wer": 0.6003126776577601,
+        "bleu": {
+            "bleu": 0.31174954306974056,
+            "precisions": [
+                0.6535147680666391,
+                0.42045267895272825,
+                0.27996194230181115,
+                0.19724108808107824
+            ],
+            "brevity_penalty": 0.8882569131010156,
+            "length_ratio": 0.8940591245025583,
+            "translation_length": 31453,
+            "reference_length": 35180
+        }
+    }
+}

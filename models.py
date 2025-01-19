@@ -241,6 +241,11 @@ class Small100:
         generated_tokens = self.model.generate(**encoded_text)
         return self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)[0]
 
+MBART_LANG_IDS = {
+    "en": "en_XX",
+    "zh": "zh_CN",
+}
+
 class MBartLarge50ManyToOne:
     def __init__(
         self,
@@ -266,7 +271,18 @@ class MBartLarge50ManyToOne:
         self.model.to(self.device)
         return self.tokenizer, self.model
 
-    def translate(self, text: str, source_lang: str, target_lang: str = "en_XX") -> str:
+    def unload(self):
+        if self.model is not None:
+            del self.model
+        if self.tokenizer is not None:
+            del self.tokenizer
+        # Flush the current model from memory
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        gc.collect()
+
+
+    def translate(self, text: str, source: str, target: str = "en_XX") -> str:
         """
         Translates text from the source language to the target language (default: English).
 
@@ -282,7 +298,7 @@ class MBartLarge50ManyToOne:
             self.load_model()
 
         # Set the source language
-        self.tokenizer.src_lang = source_lang
+        self.tokenizer.src_lang = MBART_LANG_IDS[source]
 
         # Tokenize input text
         inputs = self.tokenizer(text, return_tensors="pt")
@@ -292,7 +308,7 @@ class MBartLarge50ManyToOne:
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                forced_bos_token_id=self.tokenizer.lang_code_to_id[target_lang],
+                forced_bos_token_id=self.tokenizer.lang_code_to_id[MBART_LANG_IDS[target]],
             )
 
         # Decode the translation
@@ -325,7 +341,18 @@ class MBartLarge50ManyToMany:
         self.model.to(self.device)
         return self.tokenizer, self.model
 
-    def translate(self, text: str, source_lang: str, target_lang: str) -> str:
+    def unload(self):
+        if self.model is not None:
+            del self.model
+        if self.tokenizer is not None:
+            del self.tokenizer
+        # Flush the current model from memory
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        gc.collect()
+
+
+    def translate(self, text: str, source: str, target: str) -> str:
         """
         Translates text from the source language to the target language.
         Args:
@@ -339,7 +366,7 @@ class MBartLarge50ManyToMany:
             self.load_model()
 
         # Set the source language
-        self.tokenizer.src_lang = source_lang
+        self.tokenizer.src_lang = MBART_LANG_IDS[source]
 
         # Tokenize input text
         inputs = self.tokenizer(text, return_tensors="pt")
@@ -349,7 +376,7 @@ class MBartLarge50ManyToMany:
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                forced_bos_token_id=self.tokenizer.lang_code_to_id[target_lang],
+                forced_bos_token_id=self.tokenizer.lang_code_to_id[MBART_LANG_IDS[target]],
             )
 
         # Decode the translation

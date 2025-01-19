@@ -1,9 +1,7 @@
 from datasets import load_dataset, Dataset
-from datasets.packaged_modules.arrow.arrow import datasets
-from pandas.core.frame import reconstruct_func
 from fleurs import _FLEURS_LONG_TO_LANG
 from config import STORAGE_DIR_DATA_FLEURS
-from models import Nllb200, Small100
+from models import Nllb200, Small100, MBartLarge50ManyToMany
 from pathlib import Path
 from tqdm import tqdm
 from whisper.normalizers import BasicTextNormalizer, EnglishTextNormalizer
@@ -87,7 +85,7 @@ batch_size = 32
 
 # Make folder to store predictions
 cwd = Path.cwd()
-output_folder = cwd / "predictions-translation"
+output_folder = cwd / "predictions-translation" / "fleurs"
 output_folder.mkdir(exist_ok=True)
 
 # Define models
@@ -96,6 +94,7 @@ models = [
     Nllb200(device=device),
     # Nllb200(model_id="facebook/nllb-200-distilled-1.3B", device=device),
     Small100(device=device),
+    MBartLarge50ManyToMany(device=device)
 ]
 
 # Define evaluation metrics
@@ -169,7 +168,7 @@ for model in models:
 
     # Combine the batch outputs into a single file
     batch_output_file_paths = glob.glob(
-        str(output_folder / f"{model.get_model_name()}_*.json")
+        str(output_folder / f"{model.get_model_name()}_*batch*.json")
     )
 
     all_predictions = []
@@ -187,14 +186,16 @@ for model in models:
        "model": model.get_model_name(),
     }
 
+    for i, predictions in enumerate(all_predictions):
+        if type(predictions) != dict:
+            print(i, predictions)
+
     # Evaluate the predictions
     for language in languages_long:
        evaluation_results[language] = {}
        for metric in evaluation_metrics:
            predictions_lang = [
-               prediction
-               for prediction in all_predictions
-               if prediction["tgt_lang"] == long_to_lang_code_translation[language]
+               prediction for prediction in all_predictions if prediction["tgt_lang"] == long_to_lang_code_translation[language]
            ]
            predictions = [prediction["prediction"] for prediction in predictions_lang]
            references = [prediction["target_ground_truth"] for prediction in predictions_lang]
