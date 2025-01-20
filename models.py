@@ -244,6 +244,7 @@ class Small100:
 MBART_LANG_IDS = {
     "en": "en_XX",
     "zh": "zh_CN",
+    "id": "id_ID",
 }
 
 class MBartLarge50ManyToOne:

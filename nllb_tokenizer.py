@@ -17,6 +17,7 @@ from transformers import NllbTokenizerFast
 lang_list = {
     "en": "eng_Latn",
     "zh": "zho_Hans",
+    "id": "ind_Latn",
 }
 
 

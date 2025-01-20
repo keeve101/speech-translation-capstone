@@ -40,24 +40,29 @@ def add_spaces_in_chinese(prediction):
 
 def extract_and_convert_to_pd(dataset: Dataset, lang: str) -> DataFrame:
     df = dataset.to_pandas()
+    df = df.rename(columns={'id': '_id'})
     return df.rename(columns={'transcription': lang})
 
 def combine_with_pd(combined: DataFrame, dataset2: Dataset, lang2: str):
     df2 = extract_and_convert_to_pd(dataset2, lang2)
 
     return combined.merge(
-        df2[['id', lang2]], 
-        on='id',
+        df2[['_id', lang2]], 
+        on='_id',
         how='inner'
     )
 
-languages_long = ["English","Mandarin Chinese"]
-lang_codes = ["en", 'zh']
-languages_iso_649_3 = ["eng", "cmn-script_simplified"]
+languages_long = [
+    "English",
+    # "Mandarin Chinese",
+    "Indonesian",
+]
+lang_codes = [
+    "en",
+    # "zh",
+    'id',
+]
 languages_lang = [_FLEURS_LONG_TO_LANG[long.strip()] for long in languages_long]
-languages_long_to_iso_649_3 = {
-    long: iso_649_3 for long, iso_649_3 in zip(languages_long, languages_iso_649_3)
-}
 long_to_lang_code_translation = {
     long: lang_code for long, lang_code in zip(languages_long, lang_codes)
 }
@@ -78,7 +83,7 @@ for i, lang in enumerate(languages_lang):
     else:
         combined_dataset = combine_with_pd(combined_dataset, dataset, lang_codes[i])
 
-combined_dataset = Dataset.from_pandas(combined_dataset.drop_duplicates(['id']))
+combined_dataset = Dataset.from_pandas(combined_dataset.drop_duplicates(['_id']))
 
 # Define batch size
 batch_size = 32
@@ -97,10 +102,13 @@ models = [
     MBartLarge50ManyToMany(device=device)
 ]
 
+langs = '_'.join(lang_codes)
+
 # Define evaluation metrics
 wer_metric = evaluate.load("wer")
-bleu_metric = evaluate.load("bleu")
-evaluation_metrics = [wer_metric, bleu_metric]
+bleu_metric = evaluate.load("sacrebleu")
+chrf_metric = evaluate.load("chrf")
+evaluation_metrics = [wer_metric, bleu_metric, chrf_metric]
 
 for model in models:
     model.unload()
@@ -148,10 +156,9 @@ for model in models:
                         translation = normalizer(translation)
 
 
-                    # Store predictions along with 'id', 'lang_id', 'language', 'lang_group_id'.
                     predictions.append(
                         {
-                            "id": sample["id"],
+                            "id": sample["_id"],
                             "src_lang": src_lang,
                             "tgt_lang": tgt_lang,
                             "source_ground_truth": src_txt,
@@ -178,7 +185,7 @@ for model in models:
             all_predictions.extend(batch_predictions)
 
     with open(
-        f"{output_folder}/{model.get_model_name()}.json", "w", encoding="utf-8"
+        f"{output_folder}/{model.get_model_name()}_{langs}.json", "w", encoding="utf-8"
     ) as f:
         json.dump(all_predictions, f, indent=4)
 
@@ -206,6 +213,6 @@ for model in models:
            evaluation_results[language][metric.name] = results
 
     # Write the results to a JSON file
-    output_file_path = f"{output_folder}/{model.get_model_name()}_evaluation_results.json"
+    output_file_path = f"{output_folder}/{model.get_model_name()}_{langs}_evaluation_results.json"
     with open(output_file_path, "w") as output_file:
        json.dump(evaluation_results, output_file, indent=4)
