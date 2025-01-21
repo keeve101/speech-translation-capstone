@@ -1,5 +1,4 @@
 from datasets import load_dataset, Dataset
-from config import STORAGE_DIR_DATA_FLEURS
 from models import Nllb200, Small100, MBartLarge50ManyToMany
 from pathlib import Path
 from tqdm import tqdm
@@ -7,6 +6,7 @@ from whisper.normalizers import BasicTextNormalizer, EnglishTextNormalizer
 from pandas import DataFrame
 from pathlib import Path
 from config import STORAGE_DIR_DATA_FLORES_PLUS
+from itertools import permutations
 
 import json
 import glob
@@ -58,8 +58,8 @@ lang_codes = [
 ]
 languages_glottocodes = [
     "stan1293",# 
-    "beij1234",
-    # "indo1316",
+    # "beij1234",
+    "indo1316",
 ]
 glottocode_to_long = {
     glottocode: long for glottocode, long in zip(languages_glottocodes, languages_long)
@@ -180,16 +180,18 @@ for model in models:
 
     model.unload()
 
-    # Combine the batch outputs into a single file
-    batch_output_file_paths = glob.glob(
-        str(output_folder / f"{model.get_model_name()}_*batch*.json")
-    )
-
+    lang_combinations = ['-'.join(combo) for combo in permutations(lang_codes, 2)]
     all_predictions = []
-    for file in batch_output_file_paths:
-        with open(file, "r", encoding="utf-8") as f:
-            batch_predictions = json.load(f)
-            all_predictions.extend(batch_predictions)
+
+    for lang_pattern in lang_combinations:
+        batch_output_file_paths = glob.iglob(
+            str(output_folder / f"{model.get_model_name()}_*{lang_pattern}*batch*.json")
+        )
+
+        for file in batch_output_file_paths:
+            with open(file, "r", encoding="utf-8") as f:
+                batch_predictions = json.load(f)
+                all_predictions.extend(batch_predictions)
 
     with open(
         f"{output_folder}/{model.get_model_name()}_{langs}.json", "w", encoding="utf-8"
@@ -199,10 +201,6 @@ for model in models:
     evaluation_results = {
        "model": model.get_model_name(),
     }
-
-    for i, predictions in enumerate(all_predictions):
-        if type(predictions) != dict:
-            print(i, predictions)
 
     # Evaluate the predictions
     for language in languages_long:
@@ -214,7 +212,13 @@ for model in models:
            predictions = [prediction["prediction"] for prediction in predictions_lang]
            references = [prediction["target_ground_truth"] for prediction in predictions_lang]
 
-           results = metric.compute(predictions=predictions, references=references)
+           kwargs = {}
+           if metric == bleu_metric:
+               kwargs['use_effective_order'] = True
+           elif metric == chrf_metric:
+               kwargs['word_order'] = 2
+
+           results = metric.compute(predictions=predictions, references=references, **kwargs)
 
            # Store results in the dictionary under the corresponding language and metric
            evaluation_results[language][metric.name] = results

@@ -27,9 +27,9 @@
             "ref_len": 21896
         },
         "chr_f": {
-            "score": 60.054653750428145,
+            "score": 57.643373069544026,
             "char_order": 6,
-            "word_order": 0,
+            "word_order": 2,
             "beta": 2
         }
     },
@@ -60,9 +60,9 @@
             "ref_len": 19776
         },
         "chr_f": {
-            "score": 63.480490267402054,
+            "score": 60.8688078926386,
             "char_order": 6,
-            "word_order": 0,
+            "word_order": 2,
             "beta": 2
         }
     }
