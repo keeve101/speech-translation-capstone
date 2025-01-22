@@ -2,20 +2,20 @@ import whisperx.types
 import whisperx
 import numpy as np
 import torch
+import gc
 
 from transformers import (
     Wav2Vec2ForCTC,
     AutoProcessor,
     MBartForConditionalGeneration,
     MBart50TokenizerFast,
+    AutoModelForSeq2SeqLM,
+    M2M100ForConditionalGeneration
 )
 from typing import Union
-from config import (
-    STORAGE_DIR_MODEL_WHISPER,
-    STORAGE_DIR_MODEL_MMS_1B_ALL,
-    STORAGE_DIR_MODEL_MBART_LARGE_50_MANY_TO_ONE,
-    STORAGE_DIR_MODEL_MBART_LARGE_50_MANY_TO_MANY,
-)
+from config import *
+from small100_tokenization import SMALL100Tokenizer
+from nllb_tokenizer import NllbTokenizer
 from whisperx.asr import FasterWhisperPipeline
 from whisperx.types import TranscriptionResult, AlignedTranscriptionResult
 
@@ -44,6 +44,14 @@ class WhisperX:
             download_root=STORAGE_DIR_MODEL_WHISPER,
         )
         return self.model
+
+    def unload(self):
+        if self.model is not None:
+            del self.model
+        # Flush the current model from memory
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        gc.collect()
 
     def get_model(self) -> FasterWhisperPipeline:
         """Returns the loaded model, or loads it if not already loaded."""
@@ -120,6 +128,16 @@ class MMS_1B_All:
         self.model.to(self.device)
         return self.processor, self.model
 
+    def unload(self):
+        if self.model is not None:
+            del self.model
+        if self.processor is not None:
+            del self.processor
+        # Flush the current model from memory
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        gc.collect()
+
     def transcribe(self, audio: Union[str, np.ndarray], language: str = "eng"):
         """Transcribes audio using the loaded model, transcribes to English by default."""
         if self.processor is None or self.model is None:
@@ -140,6 +158,94 @@ class MMS_1B_All:
 
         return transcription
 
+
+### TRANSLATION ###
+
+class Nllb200:
+    def __init__(self, model_id: str = "facebook/nllb-200-distilled-600M", device: str = "cpu"):
+        self.model_id = model_id
+        self.tokenizers: NllbTokenizer|None = None
+        self.model: AutoModelForSeq2SeqLM|None = None
+        self.device = torch.device(device)
+
+    def get_model_name(self):
+        return self.model_id.split("/")[-1]
+
+    def load_model(self):
+        self.tokenizers = NllbTokenizer(self.model_id, cache_dir=STORAGE_DIR_MODEL_NLLB)
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_id, cache_dir=STORAGE_DIR_MODEL_NLLB)
+
+        self.model.to(self.device)
+        return self.tokenizers, self.model
+
+    def unload(self):
+        if self.model is not None:
+            del self.model
+        if self.tokenizers is not None:
+            del self.tokenizers
+        # Flush the current model from memory
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        gc.collect()
+
+    def translate(self, text: str, source: str = "en", target: str = "en", max_length=1000):
+        if self.tokenizers is None or self.model is None:
+            self.load_model()
+
+        tokenizer = self.tokenizers.get_tokenizer(source)
+
+        with torch.no_grad():
+            inputs = tokenizer(text, return_tensors="pt", padding=True).to(self.device)
+
+            translated_tokens = self.model.generate(
+                **inputs,
+                forced_bos_token_id=tokenizer.convert_tokens_to_ids(self.tokenizers.get_lang_id(target)),
+                max_length=max_length
+            )
+            translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
+            return translation
+
+class Small100:
+    def __init__(self, model_id: str = "alirezamsh/small100", device: str = "cpu"):
+        self.model_id = model_id
+        self.tokenizer = None
+        self.model = None
+        self.device = torch.device(device)
+
+    def get_model_name(self):
+        return self.model_id.split("/")[-1]
+
+    def load_model(self):
+        self.tokenizer = SMALL100Tokenizer.from_pretrained("alirezamsh/small100", cache_dir=STORAGE_DIR_MODEL_SMALL)
+        self.model = M2M100ForConditionalGeneration.from_pretrained("alirezamsh/small100", cache_dir=STORAGE_DIR_MODEL_SMALL)
+
+        self.model.to(self.device)
+        return self.tokenizer, self.model
+
+    def unload(self):
+        if self.model is not None:
+            del self.model
+        if self.tokenizer is not None:
+            del self.tokenizer
+        # Flush the current model from memory
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        gc.collect()
+
+    def translate(self, text: str, source: str = "en", target: str = "en"):
+        if self.tokenizer is None or self.model is None:
+            self.load_model()
+
+        self.tokenizer.tgt_lang = target
+        encoded_text = self.tokenizer(text, return_tensors="pt").to(self.device)
+        generated_tokens = self.model.generate(**encoded_text)
+        return self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)[0]
+
+MBART_LANG_IDS = {
+    "en": "en_XX",
+    "zh": "zh_CN",
+    "id": "id_ID",
+}
 
 class MBartLarge50ManyToOne:
     def __init__(
@@ -166,7 +272,18 @@ class MBartLarge50ManyToOne:
         self.model.to(self.device)
         return self.tokenizer, self.model
 
-    def translate(self, text: str, source_lang: str, target_lang: str = "en_XX") -> str:
+    def unload(self):
+        if self.model is not None:
+            del self.model
+        if self.tokenizer is not None:
+            del self.tokenizer
+        # Flush the current model from memory
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        gc.collect()
+
+
+    def translate(self, text: str, source: str, target: str = "en_XX") -> str:
         """
         Translates text from the source language to the target language (default: English).
 
@@ -182,7 +299,7 @@ class MBartLarge50ManyToOne:
             self.load_model()
 
         # Set the source language
-        self.tokenizer.src_lang = source_lang
+        self.tokenizer.src_lang = MBART_LANG_IDS[source]
 
         # Tokenize input text
         inputs = self.tokenizer(text, return_tensors="pt")
@@ -192,7 +309,7 @@ class MBartLarge50ManyToOne:
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                forced_bos_token_id=self.tokenizer.lang_code_to_id[target_lang],
+                forced_bos_token_id=self.tokenizer.lang_code_to_id[MBART_LANG_IDS[target]],
             )
 
         # Decode the translation
@@ -225,7 +342,18 @@ class MBartLarge50ManyToMany:
         self.model.to(self.device)
         return self.tokenizer, self.model
 
-    def translate(self, text: str, source_lang: str, target_lang: str) -> str:
+    def unload(self):
+        if self.model is not None:
+            del self.model
+        if self.tokenizer is not None:
+            del self.tokenizer
+        # Flush the current model from memory
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        gc.collect()
+
+
+    def translate(self, text: str, source: str, target: str) -> str:
         """
         Translates text from the source language to the target language.
         Args:
@@ -239,7 +367,7 @@ class MBartLarge50ManyToMany:
             self.load_model()
 
         # Set the source language
-        self.tokenizer.src_lang = source_lang
+        self.tokenizer.src_lang = MBART_LANG_IDS[source]
 
         # Tokenize input text
         inputs = self.tokenizer(text, return_tensors="pt")
@@ -249,7 +377,7 @@ class MBartLarge50ManyToMany:
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                forced_bos_token_id=self.tokenizer.lang_code_to_id[target_lang],
+                forced_bos_token_id=self.tokenizer.lang_code_to_id[MBART_LANG_IDS[target]],
             )
 
         # Decode the translation
